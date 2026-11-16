@@ -3,12 +3,9 @@ from bisect import bisect_right
 from typing import List, Dict, Any
 from mir.engine.rule_interface import BaseRule, Violation
 from mir.rules.sql.indent import IndentRule
-from mir.rules.sql.sql_utils import tokenize_sql
+from mir.rules.sql.sql_utils import find_matching_paren, get_token_depths, tokenize_sql
 
 
-_BULK_INSERT_LINE = re.compile(
-    r"^\s*INSERT\s+INTO\b.+\bVALUES\s*\(", re.IGNORECASE
-)
 _OPAQUE_STRING_ASSIGNMENT = re.compile(
     r"^\s*(?:SET\s+)?[A-Za-z_][\w.]*\s*=\s*'(?:''|[^'])*'[,;]?\s*$",
     re.IGNORECASE,
@@ -16,15 +13,61 @@ _OPAQUE_STRING_ASSIGNMENT = re.compile(
 
 
 def bulk_insert_lines(content: str, threshold: int) -> set[int]:
-    """Return repeated one-row data statements exempt from layout expansion."""
+    """Return bulk INSERT headers and VALUES rows exempt from layout expansion."""
     if threshold <= 0:
         return set()
-    candidates = {
-        line_number
-        for line_number, line in enumerate(content.splitlines(), start=1)
-        if _BULK_INSERT_LINE.match(line)
-    }
-    return candidates if len(candidates) >= threshold else set()
+    tokens = tokenize_sql(content)
+    depths = get_token_depths(tokens)
+    spans = []
+    row_count = 0
+    insert_index = None
+    index = 0
+
+    def next_active(start):
+        while start < len(tokens) and tokens[start]["type"] in {
+            "WHITESPACE",
+            "COMMENT",
+        }:
+            start += 1
+        return start
+
+    while index < len(tokens):
+        token = tokens[index]
+        if token["type"] == "SEMI":
+            insert_index = None
+        elif token["type"] == "KEYWORD":
+            keyword = token["value"].upper()
+            if keyword == "INSERT":
+                insert_index = index
+            elif insert_index is not None and depths[index] == depths[insert_index]:
+                if keyword == "SELECT":
+                    insert_index = None
+                elif keyword == "VALUES":
+                    row_index = next_active(index + 1)
+                    last_close = None
+                    while row_index < len(tokens) and tokens[row_index]["value"] == "(":
+                        close = find_matching_paren(tokens, row_index)
+                        if close is None:
+                            break
+                        row_count += 1
+                        last_close = close
+                        following = next_active(close + 1)
+                        if (
+                            following >= len(tokens)
+                            or tokens[following]["type"] != "COMMA"
+                        ):
+                            break
+                        row_index = next_active(following + 1)
+                    if last_close is not None:
+                        spans.append(
+                            (tokens[insert_index]["line"], tokens[last_close]["line"])
+                        )
+                        index = last_close
+                    insert_index = None
+        index += 1
+    if row_count < threshold:
+        return set()
+    return {line for start, end in spans for line in range(start, end + 1)}
 
 
 def wrap_comment_line(line: str, max_length: int) -> List[str]:
@@ -84,7 +127,8 @@ class LineLengthRule(BaseRule):
         "keyword-owned IN, VALUES, and TABLE lists wrap one item per line, "
         "OPTIONS and LIMIT TO lists expand, and long constraints and indexes "
         "wrap at schema-clause boundaries. "
-        "Large repeated one-row INSERT data dumps remain compact. Literal "
+        "Large INSERT data dumps remain compact, including multi-row VALUES lists. "
+        "Unrelated SQL and comments remain checked and formatted. Literal "
         "data that cannot be wrapped without changing its value is reported "
         "as nonfixable."
     )
@@ -97,19 +141,16 @@ class LineLengthRule(BaseRule):
         "bulk_insert_threshold": 100,
     }
     config_options = {
-        "max_length": {
-            "default": 120,
-            "description": "Maximum line length limit."
-        },
+        "max_length": {"default": 120, "description": "Maximum line length limit."},
         "base_indent": {
             "default": 0,
             "description": "Base indentation offset (in spaces or leading space string) to subtract before checking line lengths.",
-            "fallback": "IR-indent:base_indent"
+            "fallback": "IR-indent:base_indent",
         },
         "bulk_insert_threshold": {
             "default": 100,
             "description": (
-                "Number of repeated one-row INSERT statements that marks a "
+                "Number of inserted VALUES rows across statements that marks a "
                 "file as a bulk data dump; use 0 to disable the exemption."
             ),
         },
@@ -118,9 +159,13 @@ class LineLengthRule(BaseRule):
     examples = [
         {
             "violating": "-- This is a very long comment line that exceeds the maximum line length limit of 120 characters to demonstrate how the comment wrapping works.",
-            "correct": "-- This is a very long comment line that exceeds the maximum line length limit of 120 characters to demonstrate how the\n-- comment wrapping works."
+            "correct": "-- This is a very long comment line that exceeds the maximum line length limit of 120 characters to demonstrate how the\n-- comment wrapping works.",
         }
     ]
+
+    additional_validations = (
+        "INSERT INTO sample_item (item_id, name) VALUES (1, 'first'), (2, 'second');",
+    )
 
     def check(self, content: str, file_path: str, rule_config: Dict[str, Any]) -> List[Violation]:
         max_length = rule_config.get("max_length", self.default_config["max_length"])
@@ -214,12 +259,13 @@ class LineLengthRule(BaseRule):
 
     def fix(self, content: str, file_path: str, rule_config: Dict[str, Any]) -> str:
         max_length = rule_config.get("max_length", self.default_config["max_length"])
-        if bulk_insert_lines(
-            content,
-            rule_config.get(
-                "bulk_insert_threshold",
-                self.default_config["bulk_insert_threshold"],
-            ),
+        bulk_threshold = rule_config.get(
+            "bulk_insert_threshold", self.default_config["bulk_insert_threshold"]
+        )
+        bulk_lines = bulk_insert_lines(content, bulk_threshold)
+        if bulk_lines and all(
+            number in bulk_lines or not line.strip()
+            for number, line in enumerate(content.splitlines(), start=1)
         ):
             return content
 
@@ -241,7 +287,8 @@ class LineLengthRule(BaseRule):
                 active_by_line.setdefault(token["line"], []).append(token_index)
         for line_number, indices in active_by_line.items():
             if (
-                line_number > len(constraint_lines)
+                line_number in bulk_lines
+                or line_number > len(constraint_lines)
                 or len(constraint_lines[line_number - 1]) <= max_length
             ):
                 continue
@@ -327,11 +374,14 @@ class LineLengthRule(BaseRule):
             ):
                 chars[start:end] = list(replacement)
             content = "".join(chars)
+            bulk_lines = bulk_insert_lines(content, bulk_threshold)
 
         compact_tokens = tokenize_sql(content)
         table_function_openings = table_function_parens(compact_tokens)
         compact_edits = []
         for index, token in enumerate(compact_tokens):
+            if token["line"] in bulk_lines:
+                continue
             if token["type"] not in ("IDENTIFIER", "KEYWORD"):
                 continue
             if (
@@ -413,6 +463,7 @@ class LineLengthRule(BaseRule):
             for start, end, replacement in sorted(compact_edits, reverse=True):
                 chars[start:end] = list(replacement)
             content = "".join(chars)
+            bulk_lines = bulk_insert_lines(content, bulk_threshold)
 
         # Prefer a semantic range boundary over splitting the function calls
         # used as BETWEEN bounds. Only take the break when both resulting
@@ -435,7 +486,7 @@ class LineLengthRule(BaseRule):
         for delimiter_index in delimiter_indices:
             delimiter = range_tokens[delimiter_index]
             line_index = delimiter["line"] - 1
-            if line_index >= len(content_lines):
+            if line_index + 1 in bulk_lines or line_index >= len(content_lines):
                 continue
             line = content_lines[line_index]
             if len(line) <= max_length:
@@ -468,6 +519,7 @@ class LineLengthRule(BaseRule):
             for start, end, replacement in sorted(range_edits, reverse=True):
                 chars[start:end] = list(replacement)
             content = "".join(chars)
+            bulk_lines = bulk_insert_lines(content, bulk_threshold)
 
         # Expand long comma-separated SQL lists whose parentheses have clear
         # keyword ownership. This covers IN predicates, VALUES rows, and
@@ -476,6 +528,8 @@ class LineLengthRule(BaseRule):
         list_tokens = tokenize_sql(content)
         list_edits = []
         for open_index, opening in enumerate(list_tokens):
+            if opening["line"] in bulk_lines:
+                continue
             if opening["type"] != "PAREN" or opening["value"] != "(":
                 continue
             close_index = find_matching_paren(list_tokens, open_index)
@@ -586,6 +640,7 @@ class LineLengthRule(BaseRule):
             ):
                 chars[start:end] = list(replacement)
             content = "".join(chars)
+            bulk_lines = bulk_insert_lines(content, bulk_threshold)
         
         # 1. Run function call splitting on SQL code lines
         try:
@@ -694,6 +749,8 @@ class LineLengthRule(BaseRule):
                 
             for call in outer_calls:
                 line_idx = call["name_token"]["line"] - 1
+                if line_idx + 1 in bulk_lines:
+                    continue
                 line = lines[line_idx] if line_idx < len(lines) else ""
                 if len(line) > max_length:
                     earlier_line_tokens = [
@@ -796,16 +853,30 @@ class LineLengthRule(BaseRule):
                 for s, e, rep in sorted(edits, key=lambda x: x[0], reverse=True):
                     chars[s:e] = list(rep)
                 content = "".join(chars)
+                bulk_lines = bulk_insert_lines(content, bulk_threshold)
         except Exception:
             pass
             
         # 2. Wrap comment lines (original logic)
-        lines = content.splitlines()
+        comment_lines = {
+            token["line"]
+            for token in tokenize_sql(content)
+            if token["type"] == "COMMENT" and token["value"].startswith("--")
+        }
+        lines = content.splitlines(keepends=True)
         fixed_lines = []
-        for line in lines:
-            if line.lstrip().startswith("--"):
-                fixed_lines.extend(wrap_comment_line(line, max_length))
+        for number, line in enumerate(lines, start=1):
+            if (
+                number not in bulk_lines
+                and number in comment_lines
+                and line.lstrip().startswith("--")
+            ):
+                body = line.rstrip("\r\n")
+                ending = line[len(body) :]
+                fixed_lines.append(
+                    (ending or "\n").join(wrap_comment_line(body, max_length)) + ending
+                )
             else:
                 fixed_lines.append(line)
-                
-        return "\n".join(fixed_lines) + ("\n" if content.endswith("\n") else "")
+
+        return "".join(fixed_lines)

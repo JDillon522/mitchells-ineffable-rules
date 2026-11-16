@@ -276,7 +276,7 @@ MyBatis mapper elements (`select`, `insert`, `update`, `delete`, and reusable `s
 
 Trellis templates are detected from `-- trellis:` directives or named binds. MIR validates `if`/`elif`/`else`/`endif`, `choose`/`when`/`otherwise`/`endchoose`, and `for item in items separator=","`/`endfor`. Blocks are indented like programming-language control flow: conditional and loop bodies are one level deeper, while `when`/`otherwise` branches and their SQL nest beneath `choose`. Named binds such as `:item_id` and `:model.item_id` are opaque parameters. A Trellis template runs only rules whose metadata declares `trellis_safe = True`; external rules can opt in through the same `BaseRule` interface. PyGarden's generated SQL follows the same default layout and passes through the commit profile unchanged.
 
-Required PostgreSQL `CHECK (...)` parentheses are preserved, including when a comment separates `CHECK` from the opening parenthesis. Bulk `VALUES` rows without Boolean conditions skip the logical-group clause scan.
+Required PostgreSQL `CHECK (...)` parentheses are preserved, including when a comment separates `CHECK` from the opening parenthesis. Bulk `VALUES` rows without Boolean conditions skip the logical-group clause scan. The line-length rule counts inserted rows across single-row and multi-row `INSERT ... VALUES` statements toward `bulk_insert_threshold` (100 by default). Qualifying INSERT headers and data rows stay compact, including long literal values. Set the threshold to 0 to disable this exemption. Unrelated SQL and comments are still checked and fixed; exempt data rows and literal contents are preserved.
 
 Nullable-column equality is preserved: replacing it with matching `COALESCE(..., -1)` expressions can conflate NULL with a real -1 value. The null-coalesce rule only rewrites isolated predicates that explicitly use -1 as their fallback.
 
@@ -417,6 +417,6 @@ Releases are published from `main` through GitHub Actions and PyPI Trusted Publi
 
 *This package has been developed with **Antigravity** and **OpenAI Codex**.*
 
-*Total Cumulative Development Time: ~77.4 hours*
+*Total Cumulative Development Time: ~78.3 hours*
 
-*Last Developer Session: 2026-11-16T21:54:59Z*
+*Last Developer Session: 2026-11-16T22:53:43Z*

@@ -17,7 +17,7 @@ from mir.rules.sql.comma_style import CommaStyleRule
 from mir.rules.sql.dollar_quote_alignment import DollarQuoteAlignmentRule
 from mir.rules.sql.join_on_multi import JoinOnMultiRule
 from mir.rules.sql.keyword_case import KeywordCaseRule
-from mir.rules.sql.line_length import LineLengthRule
+from mir.rules.sql.line_length import LineLengthRule, bulk_insert_lines
 from mir.rules.sql.named_parameters import NamedParametersRule
 from mir.rules.sql.null_coalesce import NullCoalesceRule
 from mir.rules.sql.operator_spacing import OperatorSpacingRule
@@ -428,6 +428,100 @@ class TestSqlCompatibility(unittest.TestCase):
         self.assertEqual(
             rule.fix(limit_to, "generic.sql", {}), expected_limit_to
         )
+
+    def test_multi_row_insert_bulk_threshold_counts_rows_not_nested_arguments(self):
+        source = (
+            "INSERT INTO sample_item (item_id, payload) VALUES\n"
+            "    (1, decode('abcd', 'hex')),\n"
+            "    /* a separator */ (2, 'commas, parentheses ), ('),\n"
+            "    (3, (SELECT 'nested'));\n"
+            "SELECT extraordinarily_long_unrelated_column FROM extraordinarily_long_unrelated_table;"
+        )
+        self.assertEqual(bulk_insert_lines(source, 3), {1, 2, 3, 4})
+        self.assertEqual(bulk_insert_lines(source, 4), set())
+        self.assertEqual(bulk_insert_lines(source, 0), set())
+        violations = LineLengthRule().check(
+            source,
+            "generic.sql",
+            {
+                "max_length": 50,
+                "bulk_insert_threshold": 3,
+            },
+        )
+        self.assertEqual([violation.line_number for violation in violations], [5])
+
+    def test_bulk_insert_exemption_preserves_rows_but_fixes_other_lines(self):
+        prefix = (
+            "CREATE INDEX very_long_index_name_for_sample_item ON sample_item (item_id);\n"
+            "SELECT coalesce(very_long_selected_item_count, very_long_default_item_count);\n"
+        )
+        rows = (
+            "INSERT INTO sample_item (item_id, payload) VALUES\n"
+            + ",\n".join(
+                "    (" + str(index) + ", decode('" + "ab" * 80 + "', 'hex'))"
+                for index in range(3)
+            )
+            + ";\n"
+        )
+        comment = "-- " + "this unrelated comment should wrap " * 5 + "\n"
+        rule = LineLengthRule()
+        config = {"max_length": 60, "bulk_insert_threshold": 3}
+        for ending in ("\n", "\r\n"):
+            with self.subTest(ending=repr(ending)):
+                source = (prefix + rows + comment).replace("\n", ending)
+                fixed = rule.fix(source, "generic.sql", config)
+                self.assertNotEqual(fixed, source)
+                self.assertIn(rows.replace("\n", ending), fixed)
+                self.assertIn("SELECT coalesce(\n", fixed)
+                self.assertFalse(rule.check(fixed, "generic.sql", config))
+                self.assertEqual(rule.fix(fixed, "generic.sql", config), fixed)
+                self.assertEqual(
+                    protected_sql_signature(source), protected_sql_signature(fixed)
+                )
+
+    def test_bulk_insert_fix_preserves_literal_lines_that_look_like_comments(self):
+        literal = "'first line\n-- " + "literal data " * 12 + "\nlast line'"
+        source = (
+            "INSERT INTO sample_item VALUES (1), (2), (3)\n"
+            "RETURNING " + literal + ";\n"
+            "-- " + "real comment " * 12 + "\n"
+        )
+        rule = LineLengthRule()
+        config = {"max_length": 80, "bulk_insert_threshold": 3}
+        fixed = rule.fix(source, "generic.sql", config)
+        self.assertNotEqual(source, fixed)
+        self.assertIn(literal, fixed)
+        self.assertEqual(
+            protected_sql_signature(source), protected_sql_signature(fixed)
+        )
+        self.assertFalse(
+            any(v.is_fixable for v in rule.check(fixed, "generic.sql", config))
+        )
+        self.assertEqual(rule.fix(fixed, "generic.sql", config), fixed)
+
+    def test_bulk_insert_detection_ignores_select_values_comments_and_strings(self):
+        for source in (
+            "INSERT INTO sample_item SELECT * FROM (VALUES (1), (2), (3)) AS source(item_id);",
+            "-- INSERT INTO sample_item VALUES (1), (2), (3);\nSELECT 1;",
+            "SELECT 'INSERT INTO sample_item VALUES (1), (2), (3);';",
+            (
+                "SELECT 'header\nINSERT INTO sample_item VALUES (1);\n"
+                "INSERT INTO sample_item VALUES (2);\nINSERT INTO sample_item VALUES (3);';"
+            ),
+            "INSERT INTO sample_item VALUES (coalesce(1, 2, 3));",
+            "INSERT INTO sample_item VALUES (1, 2, 3;",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(bulk_insert_lines(source, 3), set())
+
+    def test_bulk_insert_threshold_can_span_single_and_multi_row_statements(self):
+        source = (
+            "INSERT INTO sample_item VALUES (1);\n"
+            'INSERT\nINTO "sample_item" (item_id)\nVALUES (2),\n(3)\n'
+            "ON CONFLICT DO NOTHING;"
+        )
+        self.assertEqual(bulk_insert_lines(source, 3), {1, 2, 3, 4, 5})
+        self.assertEqual(bulk_insert_lines(source, 4), set())
 
     def test_line_length_reports_literal_data_as_nonfixable(self):
         assignment = (

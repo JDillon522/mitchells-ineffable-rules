@@ -790,6 +790,48 @@ class TestRunnerIntegration(unittest.TestCase):
         self.assertEqual(result.content, rows)
         self.assertFalse(result.diagnostics)
 
+    def test_commit_profile_preserves_multi_row_bulk_insert_literals(self):
+        source = (
+            "INSERT INTO sample_item (item_id, payload) VALUES\n"
+            + ",\n".join(
+                "    (" + str(index) + ", decode('" + "ab" * 80 + "', 'hex'))"
+                for index in range(3)
+            )
+            + ";\n"
+        )
+        config = Config()
+        config.profile = "commit"
+        config.fix = True
+        config.lines = {2}
+        config.rule_configs = {
+            "IR-line-length": {"bulk_insert_threshold": 3, "max_length": 80}
+        }
+        first = process_document(config, source, "generic.sql", "sql")
+        second = process_document(config, first.content, "generic.sql", "sql")
+        self.assertEqual(first.content, source)
+        self.assertEqual(second.content, source)
+        self.assertEqual(first.errors, 0)
+        self.assertFalse(first.diagnostics)
+
+    def test_commit_profile_fixes_comments_outside_bulk_insert(self):
+        rows = "INSERT INTO sample_item VALUES (1), (2), (3);\n"
+        comment = "-- " + "plain words " * 12 + "\n"
+        config = Config()
+        config.profile = "commit"
+        config.fix = True
+        config.rule_configs = {
+            "IR-line-length": {"bulk_insert_threshold": 3, "max_length": 80}
+        }
+        source = comment + rows + comment
+        first = process_document(config, source, "generic.sql", "sql")
+        second = process_document(config, first.content, "generic.sql", "sql")
+        self.assertIn(rows, first.content)
+        self.assertNotEqual(first.content, source)
+        self.assertEqual(first.content, second.content)
+        self.assertEqual(first.errors, 0)
+        self.assertFalse(first.diagnostics)
+        self.assertFalse(second.diagnostics)
+
     def test_commit_profile_wraps_long_comment_on_literal_unchanged(self):
         sql_content = (
             "COMMENT ON COLUMN sample_item.extraordinarily_long_status_name IS "
