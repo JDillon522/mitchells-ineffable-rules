@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from mir.rules.sql.additive_wrap import AdditiveWrapRule
 from mir.rules.sql.union_layout import UnionLayoutRule
@@ -155,6 +156,48 @@ class TestSqlCompatibility(unittest.TestCase):
 
         self.assertEqual(rule.fix(source, "generic.sql", {}), source)
         self.assertEqual(rule.check(source, "generic.sql", {}), [])
+
+    def test_bulk_values_parentheses_require_linear_token_lookups(self):
+        source = (
+            "INSERT INTO sample_item (name) VALUES "
+            + ", ".join("(decode('abcd', 'hex'))" for _ in range(200))
+            + ";"
+        )
+
+        class CountingTokens(list):
+            reads = 0
+
+            def __getitem__(self, index):
+                self.reads += 1
+                return super().__getitem__(index)
+
+        tokens = CountingTokens(tokenize_sql(source))
+        with patch("mir.rules.sql.paren_multi.tokenize_sql", return_value=tokens):
+            self.assertEqual(ParenMultiRule().fix(source, "generic.sql", {}), source)
+        self.assertLess(tokens.reads, 30 * len(tokens))
+
+    def test_constraint_comments_do_not_hide_required_parentheses(self):
+        rule = ParenSingleRule()
+        source = "CREATE TABLE sample_item (CHECK /* retain */ (amount > 0));"
+        self.assertEqual(rule.check(source, "generic.sql", {}), [])
+        self.assertEqual(rule.fix(source, "generic.sql", {}), source)
+
+    def test_boolean_check_constraints_keep_required_parentheses(self):
+        rule = ParenSameOpRule()
+        for source in (
+            "CREATE TABLE sample_item (amount NUMERIC CHECK (amount >= 0 AND amount < 100));",
+            "CREATE TABLE sample_item (CHECK (NOT empty(shape) AND valid(shape)));",
+            "CREATE TABLE sample_item (CHECK ((kind = 'point' AND is_point) OR (kind = 'area' AND is_area)));",
+            "ALTER TABLE sample_item ADD CONSTRAINT valid_amount CHECK /* retain */ (amount > 0 AND amount < 100);",
+            "CREATE DOMAIN valid_amount AS NUMERIC CHECK (VALUE > 0 AND VALUE < 100);",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(rule.check(source, "generic.sql", {}), [])
+                self.assertEqual(rule.fix(source, "generic.sql", {}), source)
+                self.assertEqual(
+                    rule.fix(rule.fix(source, "generic.sql", {}), "generic.sql", {}),
+                    source,
+                )
 
     def test_trailing_whitespace_is_removed_without_changing_line_endings(self):
         source = "SELECT item_id  \r\nFROM sample_item;\t\r\n"

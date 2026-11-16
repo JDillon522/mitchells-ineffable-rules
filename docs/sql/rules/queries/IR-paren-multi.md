@@ -26,6 +26,10 @@ SELECT * FROM users WHERE active AND (enabled OR not blocked);
 
 #### Additional Validations
 ```sql
+INSERT INTO sample_item (name) VALUES (decode('abcd', 'hex')), (decode('ef01', 'hex'));
+```
+
+```sql
 SELECT item_id FROM sample_item WHERE NOT EXISTS (SELECT 1 FROM sample_child);
 ```
 

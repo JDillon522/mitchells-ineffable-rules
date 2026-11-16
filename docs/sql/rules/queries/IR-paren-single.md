@@ -106,3 +106,7 @@ SELECT CASE WHEN (sum(item_count) IS NULL) THEN false ELSE true END FROM sample_
 ```sql
 SELECT (payload ->> 'itemId')::INTEGER FROM sample_item;
 ```
+
+```sql
+CREATE TABLE sample_item (CHECK /* retain */ (amount > 0));
+```

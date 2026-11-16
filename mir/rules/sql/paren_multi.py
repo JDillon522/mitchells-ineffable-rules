@@ -26,6 +26,7 @@ class ParenMultiRule(BaseRule):
         }
     ]
     additional_validations = [
+        "INSERT INTO sample_item (name) VALUES (decode('abcd', 'hex')), (decode('ef01', 'hex'));",
         "SELECT item_id FROM sample_item WHERE NOT EXISTS (SELECT 1 FROM sample_child);",
         "SELECT item_id FROM sample_item WHERE (created_at BETWEEN :start AND :end);",
         (
@@ -64,23 +65,6 @@ class ParenMultiRule(BaseRule):
 
         for i, tok in enumerate(tokens):
             if tok["type"] == "PAREN" and tok["value"] == "(":
-                in_where_or_on = False
-                owning_clause = None
-                for idx in range(i - 1, -1, -1):
-                    t = tokens[idx]
-                    if depths[idx] <= depths[i]:
-                        if t["type"] == "SEMI" or t["value"] == ";":
-                            break
-                        if t["type"] == "KEYWORD" and t["value"].upper() in ("WHERE", "ON"):
-                            in_where_or_on = True
-                            owning_clause = t["value"].upper()
-                            break
-                        if t["type"] == "KEYWORD" and t["value"].upper() in ("SELECT", "FROM", "GROUP", "ORDER", "LIMIT", "WITH"):
-                            break
-                            
-                if not in_where_or_on:
-                    continue
-                    
                 close_idx = find_matching_paren(tokens, i)
                 if close_idx is None:
                     continue
@@ -101,7 +85,34 @@ class ParenMultiRule(BaseRule):
                             
                 if not has_logical_check:
                     continue
-                    
+
+                in_where_or_on = False
+                owning_clause = None
+                for idx in range(i - 1, -1, -1):
+                    t = tokens[idx]
+                    if depths[idx] <= depths[i]:
+                        if t["type"] == "SEMI" or t["value"] == ";":
+                            break
+                        if t["type"] == "KEYWORD" and t["value"].upper() in (
+                            "WHERE",
+                            "ON",
+                        ):
+                            in_where_or_on = True
+                            owning_clause = t["value"].upper()
+                            break
+                        if t["type"] == "KEYWORD" and t["value"].upper() in (
+                            "SELECT",
+                            "FROM",
+                            "GROUP",
+                            "ORDER",
+                            "LIMIT",
+                            "WITH",
+                        ):
+                            break
+
+                if not in_where_or_on:
+                    continue
+
                 line_start = content.rfind("\n", 0, tok["start"]) + 1
                 line_prefix = content[line_start:tok["start"]]
                 paren_indent = ""

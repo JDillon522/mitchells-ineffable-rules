@@ -276,6 +276,8 @@ MyBatis mapper elements (`select`, `insert`, `update`, `delete`, and reusable `s
 
 Trellis templates are detected from `-- trellis:` directives or named binds. MIR validates `if`/`elif`/`else`/`endif`, `choose`/`when`/`otherwise`/`endchoose`, and `for item in items separator=","`/`endfor`. Blocks are indented like programming-language control flow: conditional and loop bodies are one level deeper, while `when`/`otherwise` branches and their SQL nest beneath `choose`. Named binds such as `:item_id` and `:model.item_id` are opaque parameters. A Trellis template runs only rules whose metadata declares `trellis_safe = True`; external rules can opt in through the same `BaseRule` interface. PyGarden's generated SQL follows the same default layout and passes through the commit profile unchanged.
 
+Required PostgreSQL `CHECK (...)` parentheses are preserved, including when a comment separates `CHECK` from the opening parenthesis. Bulk `VALUES` rows without Boolean conditions skip the logical-group clause scan.
+
 Nullable-column equality is preserved: replacing it with matching `COALESCE(..., -1)` expressions can conflate NULL with a real -1 value. The null-coalesce rule only rewrites isolated predicates that explicitly use -1 as their fallback.
 
 The commit profile rejects a proposed fix if it changes protected SQL syntax: template parameters, string literals, quoted identifiers, PostgreSQL cast target identity, or the operator sequence. For Trellis templates it also rejects removal, insertion, reordering, or expression changes in directive comments while permitting layout-only normalization. Cast target casing may be standardized by the datatype rule. The same SQL invariant is checked after staged-line filtering and after MyBatis edits are mapped back into XML.
@@ -415,6 +417,6 @@ Releases are published from `main` through GitHub Actions and PyPI Trusted Publi
 
 *This package has been developed with **Antigravity** and **OpenAI Codex**.*
 
-*Total Cumulative Development Time: ~76.9 hours*
+*Total Cumulative Development Time: ~77.4 hours*
 
-*Last Developer Session: 2026-11-13T15:32:55Z*
+*Last Developer Session: 2026-11-16T21:54:23Z*

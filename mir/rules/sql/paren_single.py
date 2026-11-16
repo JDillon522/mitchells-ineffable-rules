@@ -54,6 +54,7 @@ class ParenSingleRule(BaseRule):
         "SELECT item_id FROM sample_item WHERE NOT (enabled AND visible);",
         "SELECT CASE WHEN (sum(item_count) IS NULL) THEN false ELSE true END FROM sample_item;",
         "SELECT (payload ->> 'itemId')::INTEGER FROM sample_item;",
+        "CREATE TABLE sample_item (CHECK /* retain */ (amount > 0));",
     ]
 
     def _is_simple_atom(self, tokens: List[dict]) -> bool:
@@ -102,7 +103,7 @@ class ParenSingleRule(BaseRule):
                 # 1. Subquery check
                 next_active = None
                 for idx in range(i + 1, close_idx):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         next_active = tokens[idx]
                         break
                 if next_active and next_active["type"] == "KEYWORD" and next_active["value"].upper() == "SELECT":
@@ -112,7 +113,7 @@ class ParenSingleRule(BaseRule):
                 prev_active = None
                 prev_active_idx = -1
                 for idx in range(i - 1, -1, -1):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         prev_active = tokens[idx]
                         prev_active_idx = idx
                         break
@@ -124,7 +125,7 @@ class ParenSingleRule(BaseRule):
                         # Check DISTINCT ON
                         prev_prev = None
                         for p_idx in range(prev_active_idx - 1, -1, -1):
-                            if tokens[p_idx]["type"] != "WHITESPACE":
+                            if tokens[p_idx]["type"] not in ("WHITESPACE", "COMMENT"):
                                 prev_prev = tokens[p_idx]
                                 break
                         if prev_prev and prev_prev["value"].upper() == "DISTINCT":
@@ -172,7 +173,7 @@ class ParenSingleRule(BaseRule):
 
                 next_after_close = None
                 for idx in range(close_idx + 1, n):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         next_after_close = tokens[idx]
                         break
                 if next_after_close and next_after_close["value"].upper() in ("ASC", "DESC"):

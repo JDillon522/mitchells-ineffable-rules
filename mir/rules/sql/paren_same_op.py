@@ -12,7 +12,10 @@ class ParenSameOpRule(BaseRule):
     commit_semantic_rewrite = True
     embedded_safe = True
     rule_id = "IR-paren-same-op"
-    description = "Unnecessary parentheses around homogeneous logical conditions should be removed."
+    description = (
+        "Unnecessary parentheses around homogeneous logical conditions should be removed, "
+        "while required CHECK constraint parentheses are preserved."
+    )
     category = "queries"
     is_fixable = "yes"
     enabled_by_default = True
@@ -32,6 +35,12 @@ class ParenSameOpRule(BaseRule):
         "SELECT id FROM users WHERE (active = true);",  # Checked by IR-paren-single, skip here
         "SELECT count(*) FILTER (WHERE active AND visible) FROM users;",
         "SELECT id FROM users WHERE NOT (active AND visible);",
+        "CREATE TABLE sample_item (amount NUMERIC CHECK (amount >= 0 AND amount < 100));",
+        "CREATE TABLE sample_item (CHECK (enabled OR visible));",
+        "ALTER TABLE sample_item ADD CONSTRAINT valid_amount CHECK (amount > 0 AND amount < 100) NOT VALID;",
+        "CREATE DOMAIN positive_amount AS NUMERIC CHECK (VALUE > 0 AND VALUE < 100);",
+        "CREATE TABLE sample_item (CHECK /* retain */ (NOT empty(shape) AND valid(shape)));",
+        "CREATE TABLE sample_item (CHECK ((kind = 'point' AND is_point) OR (kind = 'area' AND is_area)));",
     ]
 
     def _find_violations(
@@ -53,7 +62,7 @@ class ParenSameOpRule(BaseRule):
                 # 1. Subquery check
                 next_active = None
                 for idx in range(i + 1, close_idx):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         next_active = tokens[idx]
                         break
                 if next_active and next_active["type"] == "KEYWORD" and next_active["value"].upper() == "SELECT":
@@ -63,7 +72,7 @@ class ParenSameOpRule(BaseRule):
                 prev_active = None
                 prev_active_idx = -1
                 for idx in range(i - 1, -1, -1):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         prev_active = tokens[idx]
                         prev_active_idx = idx
                         break
@@ -75,22 +84,40 @@ class ParenSameOpRule(BaseRule):
                         # Check DISTINCT ON
                         prev_prev = None
                         for p_idx in range(prev_active_idx - 1, -1, -1):
-                            if tokens[p_idx]["type"] != "WHITESPACE":
+                            if tokens[p_idx]["type"] not in ("WHITESPACE", "COMMENT"):
                                 prev_prev = tokens[p_idx]
                                 break
                         if prev_prev and prev_prev["value"].upper() == "DISTINCT":
                             is_special = True
-                    elif val_upper in {"OVER", "NOT"}:
-                        is_special = True
-                    elif prev_active["type"] == "IDENTIFIER":
-                        is_special = True
-                    elif prev_active["type"] == "KEYWORD" and val_upper in (
-                        "COUNT", "COALESCE", "SUM", "AVG", "MIN", "MAX",
-                        "CONCAT", "SUBSTR", "DATE_PART", "NOW", "STRING_AGG",
-                        "DATE", "FILTER", "ANY", "SOME", "EXISTS", "LATERAL",
+                    elif (
+                        val_upper in {"OVER", "NOT", "CHECK"}
+                        or prev_active["type"] == "IDENTIFIER"
+                        or (
+                            prev_active["type"] == "KEYWORD"
+                            and val_upper
+                            in (
+                                "COUNT",
+                                "COALESCE",
+                                "SUM",
+                                "AVG",
+                                "MIN",
+                                "MAX",
+                                "CONCAT",
+                                "SUBSTR",
+                                "DATE_PART",
+                                "NOW",
+                                "STRING_AGG",
+                                "DATE",
+                                "FILTER",
+                                "ANY",
+                                "SOME",
+                                "EXISTS",
+                                "LATERAL",
+                            )
+                        )
                     ):
                         is_special = True
-                        
+
                 if is_special:
                     continue
                     
@@ -139,7 +166,7 @@ class ParenSameOpRule(BaseRule):
                             break
                         if t["type"] == "SEMI":
                             break
-                            
+
                 # Walk forward
                 if not has_opposite:
                     for idx in range(close_idx + 1, n):
@@ -152,7 +179,10 @@ class ParenSameOpRule(BaseRule):
                                 "ELSE", "END",
                             ):
                                 break
-                            if t["type"] == "KEYWORD" and t["value"].upper() == opposite_op:
+                            if (
+                                t["type"] == "KEYWORD"
+                                and t["value"].upper() == opposite_op
+                            ):
                                 has_opposite = True
                                 break
                             if t["type"] == "SEMI":
@@ -164,7 +194,7 @@ class ParenSameOpRule(BaseRule):
                 # Check next token for CAST
                 next_after_close = None
                 for idx in range(close_idx + 1, n):
-                    if tokens[idx]["type"] != "WHITESPACE":
+                    if tokens[idx]["type"] not in ("WHITESPACE", "COMMENT"):
                         next_after_close = tokens[idx]
                         break
                 if next_after_close and next_after_close["type"] == "CAST":
