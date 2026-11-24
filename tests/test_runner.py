@@ -1324,6 +1324,35 @@ class TestRunnerIntegration(unittest.TestCase):
         self.assertFalse(first.diagnostics)
         self.assertFalse(second.diagnostics)
 
+    def test_copy_query_does_not_cycle_function_and_query_layout(self):
+        source = (
+            "COPY (\n"
+            " SELECT id,name,\n"
+            " CASE WHEN active THEN 'active' ELSE 'inactive' END AS status\n"
+            " FROM sample_item\n"
+            " ORDER BY id,name\n"
+            ") TO STDOUT WITH (FORMAT CSV,HEADER);\n"
+        )
+        expected = (
+            "COPY (\n"
+            "    SELECT id, name, CASE WHEN active THEN 'active' ELSE 'inactive' END AS status\n"
+            "    FROM sample_item\n"
+            "    ORDER BY id, name\n"
+            ") TO STDOUT WITH (FORMAT CSV,HEADER);\n"
+        )
+        config = Config()
+        config.fix = True
+
+        first = process_document(config, source, "copy.sql", "sql")
+        second = process_document(config, first.content, "copy.sql", "sql")
+
+        self.assertEqual(first.content, expected)
+        self.assertEqual(second.content, expected)
+        self.assertFalse(first.violations)
+        self.assertFalse(second.violations)
+        self.assertFalse(first.diagnostics)
+        self.assertFalse(second.diagnostics)
+
     def test_formatter_cycle_does_not_persist_a_partial_state(self):
         class OscillatingRule(BaseRule):
             rule_id = "IR-test-oscillation"

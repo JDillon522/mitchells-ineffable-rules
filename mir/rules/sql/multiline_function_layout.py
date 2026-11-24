@@ -53,6 +53,7 @@ class MultilineFunctionLayoutRule(BaseRule):
         },
     ]
     additional_validations = [
+        "COPY (\n    SELECT item_id, owner_id FROM sample_item\n) TO STDOUT;",
         "sum(item_count)",
         "coalesce(item_count, 0)",
         "WHERE (item_id, owner_id) = (:item_id, :owner_id)",
