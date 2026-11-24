@@ -29,3 +29,10 @@ SELECT COUNT(id), Sum(price) FROM orders;
 ```sql
 SELECT count(id), sum(price) FROM orders;
 ```
+
+#### Additional Validations
+```sql
+COPY (
+    SELECT item_id FROM sample_item
+) TO STDOUT;
+```

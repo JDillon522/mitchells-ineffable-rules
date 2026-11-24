@@ -77,6 +77,7 @@ Selected Prettier ranges that reach the end of a file include its final line end
 JavaScript provider offsets are converted between Python string indexes and UTF-16, so emoji before an edit do not shift or corrupt the fix.
 MyBatis dynamic argument layout locates closing parentheses outside SQL comments and literals. Disable it with either `IR-multiline-function-layout` or `sql:IR-multiline-function-layout`.
 Nested boolean groups keep their own layout. MyBatis `IN` predicates continued by `<foreach>` retain XML-owned layout so repeated formatting converges.
+PostgreSQL `COPY (SELECT ...) TO STDOUT` uses query layout inside its parentheses and is not treated as a function call.
 
 ### 1. Running Tests
 You can run the full test suite using `uv`:
@@ -419,6 +420,6 @@ Releases are published from `main` through GitHub Actions and PyPI Trusted Publi
 
 *This package has been developed with **Antigravity** and **OpenAI Codex**.*
 
-*Total Cumulative Development Time: ~78.9 hours*
+*Total Cumulative Development Time: ~80.0 hours*
 
-*Last Developer Session: 2026-11-19T21:42:44Z*
+*Last Developer Session: 2026-11-24T16:53:55Z*

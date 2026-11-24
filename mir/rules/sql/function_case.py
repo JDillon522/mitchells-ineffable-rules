@@ -58,7 +58,9 @@ class FunctionCaseRule(BaseRule):
             "correct": "SELECT count(id), sum(price) FROM orders;"
         }
     ]
-    additional_validations = []
+    additional_validations = (
+        "COPY (\n    SELECT item_id FROM sample_item\n) TO STDOUT;",
+    )
 
     def _get_exclusions(self, rule_config: Dict[str, Any]) -> Set[str]:
         override = rule_config.get("override_exclusions")

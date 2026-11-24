@@ -46,6 +46,12 @@ WHERE (
 
 #### Additional Validations
 ```sql
+COPY (
+    SELECT item_id, owner_id FROM sample_item
+) TO STDOUT;
+```
+
+```sql
 sum(item_count)
 ```
 
